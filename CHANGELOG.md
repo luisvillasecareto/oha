@@ -1,5 +1,6 @@
 # Unreleased
 
+-  Use `kanal` instead of `flume` as channel library #200
 -  Support [Ipv6] format requested_host in --connect-to #197
 
 # 0.5.5 (2022-09-19)

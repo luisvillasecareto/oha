@@ -278,7 +278,7 @@ async fn main() -> anyhow::Result<()> {
         PrintMode::Text
     };
 
-    let (result_tx, result_rx) = flume::unbounded();
+    let (result_tx, result_rx) = kanal::unbounded_async();
 
     let start = std::time::Instant::now();
 
@@ -286,10 +286,10 @@ async fn main() -> anyhow::Result<()> {
         // When `--no-tui` is enabled, just collect all data.
         tokio::spawn(
             async move {
-                let (ctrl_c_tx, ctrl_c_rx) = flume::unbounded();
+                let (ctrl_c_tx, ctrl_c_rx) = kanal::unbounded_async();
 
                 tokio::spawn(async move {
-                    if let Ok(())  = tokio::signal::ctrl_c().await {
+                    if let Ok(()) = tokio::signal::ctrl_c().await {
                         let _ = ctrl_c_tx.send(());
                     }
                 });
@@ -297,14 +297,14 @@ async fn main() -> anyhow::Result<()> {
                 let mut all: Vec<Result<RequestResult, ClientError>> = Vec::new();
                 loop {
                     tokio::select! {
-                        report = result_rx.recv_async() => {
+                        report = result_rx.recv() => {
                             if let Ok(report) = report {
                                 all.push(report);
                             } else {
                                 break;
                             }
                         }
-                        _ = ctrl_c_rx.recv_async() => {
+                        _ = ctrl_c_rx.recv() => {
                             // User pressed ctrl-c.
                             let _ = printer::print_result(&mut std::io::stdout(),print_mode,start, &all, start.elapsed());
                             std::process::exit(libc::EXIT_SUCCESS);
