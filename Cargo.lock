@@ -739,6 +739,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kanal"
+version = "0.1.0-pre2"
+source = "git+https://github.com/fereidani/kanal.git#184be1e2b2a5966ef3f57f8848131df4de0bab75"
+dependencies = [
+ "lock_api",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -926,6 +935,7 @@ dependencies = [
  "http",
  "humantime",
  "hyper",
+ "kanal",
  "lazy_static",
  "libc",
  "native-tls",

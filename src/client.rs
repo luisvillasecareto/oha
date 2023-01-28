@@ -1,5 +1,6 @@
 use futures::future::FutureExt;
 use futures::StreamExt;
+use kanal::AsyncSender;
 use rand::prelude::*;
 use std::sync::Arc;
 use thiserror::Error;
@@ -542,7 +543,7 @@ fn is_too_many_open_files(res: &Result<RequestResult, ClientError>) -> bool {
 /// Run n tasks by m workers
 pub async fn work(
     client_builder: ClientBuilder,
-    report_tx: flume::Sender<Result<RequestResult, ClientError>>,
+    report_tx: AsyncSender<Result<RequestResult, ClientError>>,
     n_tasks: usize,
     n_workers: usize,
 ) {
@@ -550,7 +551,7 @@ pub async fn work(
     let counter = Arc::new(AtomicUsize::new(0));
 
     let futures = (0..n_workers)
-        .map(|_| {
+        .map(move |_| {
             let mut w = client_builder.build();
             let report_tx = report_tx.clone();
             let counter = counter.clone();
@@ -558,7 +559,7 @@ pub async fn work(
                 while counter.fetch_add(1, Ordering::Relaxed) < n_tasks {
                     let res = w.work().await;
                     let is_cancel = is_too_many_open_files(&res);
-                    report_tx.send_async(res).await.unwrap();
+                    report_tx.send(res).await.unwrap();
                     if is_cancel {
                         break;
                     }
@@ -575,12 +576,12 @@ pub async fn work(
 /// n tasks by m workers limit to qps works in a second
 pub async fn work_with_qps(
     client_builder: ClientBuilder,
-    report_tx: flume::Sender<Result<RequestResult, ClientError>>,
+    report_tx: AsyncSender<Result<RequestResult, ClientError>>,
     qps: usize,
     n_tasks: usize,
     n_workers: usize,
 ) {
-    let (tx, rx) = flume::unbounded();
+    let (tx, rx) = kanal::unbounded_async();
 
     tokio::spawn(async move {
         let start = std::time::Instant::now();
@@ -589,21 +590,21 @@ pub async fn work_with_qps(
                 (start + i as u32 * std::time::Duration::from_secs(1) / qps as u32).into(),
             )
             .await;
-            tx.send_async(()).await.unwrap();
+            tx.send(()).await.unwrap();
         }
         // tx gone
     });
 
     let futures = (0..n_workers)
-        .map(|_| {
+        .map(move |_| {
             let mut w = client_builder.build();
             let report_tx = report_tx.clone();
             let rx = rx.clone();
             tokio::spawn(async move {
-                while let Ok(()) = rx.recv_async().await {
+                while let Ok(()) = rx.recv().await {
                     let res = w.work().await;
                     let is_cancel = is_too_many_open_files(&res);
-                    report_tx.send_async(res).await.unwrap();
+                    report_tx.send(res).await.unwrap();
                     if is_cancel {
                         break;
                     }
@@ -620,17 +621,17 @@ pub async fn work_with_qps(
 /// n tasks by m workers limit to qps works in a second with latency correction
 pub async fn work_with_qps_latency_correction(
     client_builder: ClientBuilder,
-    report_tx: flume::Sender<Result<RequestResult, ClientError>>,
+    report_tx: AsyncSender<Result<RequestResult, ClientError>>,
     qps: usize,
     n_tasks: usize,
     n_workers: usize,
 ) {
-    let (tx, rx) = flume::unbounded();
+    let (tx, rx) = kanal::unbounded_async();
 
     tokio::spawn(async move {
         let start = std::time::Instant::now();
         for i in 0..n_tasks {
-            tx.send_async(std::time::Instant::now()).await.unwrap();
+            tx.send(std::time::Instant::now()).await.unwrap();
             tokio::time::sleep_until(
                 (start + i as u32 * std::time::Duration::from_secs(1) / qps as u32).into(),
             )
@@ -640,12 +641,12 @@ pub async fn work_with_qps_latency_correction(
     });
 
     let futures = (0..n_workers)
-        .map(|_| {
+        .map(move |_| {
             let mut w = client_builder.build();
             let report_tx = report_tx.clone();
             let rx = rx.clone();
             tokio::spawn(async move {
-                while let Ok(start) = rx.recv_async().await {
+                while let Ok(start) = rx.recv().await {
                     let mut res = w.work().await;
 
                     if let Ok(request_result) = &mut res {
@@ -653,7 +654,7 @@ pub async fn work_with_qps_latency_correction(
                     }
 
                     let is_cancel = is_too_many_open_files(&res);
-                    report_tx.send_async(res).await.unwrap();
+                    report_tx.send(res).await.unwrap();
                     if is_cancel {
                         break;
                     }
@@ -670,19 +671,19 @@ pub async fn work_with_qps_latency_correction(
 /// Run until dead_line by n workers
 pub async fn work_until(
     client_builder: ClientBuilder,
-    report_tx: flume::Sender<Result<RequestResult, ClientError>>,
+    report_tx: AsyncSender<Result<RequestResult, ClientError>>,
     dead_line: std::time::Instant,
     n_workers: usize,
 ) {
     let futures = (0..n_workers)
-        .map(|_| {
+        .map(move |_| {
             let report_tx = report_tx.clone();
             let mut w = client_builder.build();
             tokio::spawn(tokio::time::timeout_at(dead_line.into(), async move {
                 loop {
                     let res = w.work().await;
                     let is_cancel = is_too_many_open_files(&res);
-                    report_tx.send_async(res).await.unwrap();
+                    report_tx.send(res).await.unwrap();
                     if is_cancel {
                         break;
                     }
@@ -699,13 +700,13 @@ pub async fn work_until(
 /// Run until dead_line by n workers limit to qps works in a second
 pub async fn work_until_with_qps(
     client_builder: ClientBuilder,
-    report_tx: flume::Sender<Result<RequestResult, ClientError>>,
+    report_tx: AsyncSender<Result<RequestResult, ClientError>>,
     qps: usize,
     start: std::time::Instant,
     dead_line: std::time::Instant,
     n_workers: usize,
 ) {
-    let (tx, rx) = flume::bounded(qps);
+    let (tx, rx) = kanal::bounded_async(qps);
 
     let gen = tokio::spawn(async move {
         for i in 0.. {
@@ -716,7 +717,7 @@ pub async fn work_until_with_qps(
                 (start + i as u32 * std::time::Duration::from_secs(1) / qps as u32).into(),
             )
             .await;
-            if tx.send_async(()).await.is_err() {
+            if tx.send(()).await.is_err() {
                 break;
             }
         }
@@ -724,17 +725,17 @@ pub async fn work_until_with_qps(
     });
 
     let futures = (0..n_workers)
-        .map(|_| {
+        .map(move |_| {
             let mut w = client_builder.build();
             let report_tx = report_tx.clone();
             let rx = rx.clone();
             tokio::time::timeout_at(
                 dead_line.into(),
                 tokio::spawn(async move {
-                    while let Ok(()) = rx.recv_async().await {
+                    while let Ok(()) = rx.recv().await {
                         let res = w.work().await;
                         let is_cancel = is_too_many_open_files(&res);
-                        report_tx.send_async(res).await.unwrap();
+                        report_tx.send(res).await.unwrap();
                         if is_cancel {
                             break;
                         }
@@ -754,13 +755,13 @@ pub async fn work_until_with_qps(
 /// Run until dead_line by n workers limit to qps works in a second with latency correction
 pub async fn work_until_with_qps_latency_correction(
     client_builder: ClientBuilder,
-    report_tx: flume::Sender<Result<RequestResult, ClientError>>,
+    report_tx: AsyncSender<Result<RequestResult, ClientError>>,
     qps: usize,
     start: std::time::Instant,
     dead_line: std::time::Instant,
     n_workers: usize,
 ) {
-    let (tx, rx) = flume::unbounded();
+    let (tx, rx) = kanal::unbounded_async();
 
     let gen = tokio::spawn(async move {
         for i in 0.. {
@@ -772,7 +773,7 @@ pub async fn work_until_with_qps_latency_correction(
                 (start + i as u32 * std::time::Duration::from_secs(1) / qps as u32).into(),
             )
             .await;
-            if tx.send_async(now).await.is_err() {
+            if tx.send(now).await.is_err() {
                 break;
             }
         }
@@ -780,14 +781,14 @@ pub async fn work_until_with_qps_latency_correction(
     });
 
     let futures = (0..n_workers)
-        .map(|_| {
+        .map(move |_| {
             let mut w = client_builder.build();
             let report_tx = report_tx.clone();
             let rx = rx.clone();
             tokio::time::timeout_at(
                 dead_line.into(),
                 tokio::spawn(async move {
-                    while let Ok(start) = rx.recv_async().await {
+                    while let Ok(start) = rx.recv().await {
                         let mut res = w.work().await;
 
                         if let Ok(request_result) = &mut res {
@@ -795,7 +796,7 @@ pub async fn work_until_with_qps_latency_correction(
                         }
 
                         let is_cancel = is_too_many_open_files(&res);
-                        report_tx.send_async(res).await.unwrap();
+                        report_tx.send(res).await.unwrap();
                         if is_cancel {
                             break;
                         }
